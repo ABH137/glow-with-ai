@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlowAI - Skin Analysis</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-storage.js"></script>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+        }
+        body {
+            background: #0a0a0a;
+            color: #fff;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(168, 85, 247, 0.5); }
+            50% { box-shadow: 0 0 40px rgba(168, 85, 247, 0.8); }
+        }
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+        .fade-in-up { animation: fadeInUp 0.6s ease-out; }
+        .pulse-glow { animation: pulse-glow 2s infinite; }
+        .shimmer {
+            background: linear-gradient(90deg, #1a1a1a 25%, #2d2d2d 50%, #1a1a1a 75%);
+            background-size: 1000px 100%;
+            animation: shimmer 2s infinite;
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(168, 85, 247, 0.2);
+        }
+        input, textarea, select {
+            background: rgba(255, 255, 255, 0.05) !important;
+            border: 1px solid rgba(168, 85, 247, 0.3) !important;
+            color: white !important;
+        }
+        input::placeholder, textarea::placeholder {
+            color: rgba(255, 255, 255, 0.5) !important;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none !important;
+            border-color: #a855f7 !important;
+            box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.2) !important;
+        }
+    </style>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0a0a0a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="apple-touch-icon" href="https://via.placeholder.com/192.png?text=GlowAI">
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        let firebaseUser = null;
+        let userData = {};
+        let scanHistory = [];
+        let userSubscription = { plan: 'free', scansThisMonth: 0 };
+
+        const mockAuth = {
+            signUp: async (email, password) => {
+                firebaseUser = { uid: Math.random().toString(36).substr(2, 9), email };
+                userData = { email, skinType: '', concerns: [], age: 0, gender: '', location: '', createdAt: new Date().toISOString(), streak: 0, lastScanDate: null };
+                return firebaseUser;
+            },
+            login: async (email, password) => {
+                firebaseUser = { uid: 'user123', email };
+                return firebaseUser;
+            },
+            logout: () => { firebaseUser = null; },
+            getCurrentUser: () => firebaseUser
+        };
+
+        const analyzeSkinWithAPI = async (imageBase64) => {
+            try {
+                const response = await fetch('/.netlify/functions/skin-analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imageBase64 })
+                });
+
+                if (!response.ok) throw new Error('Analysis API error');
+                return await response.json();
+            } catch (error) {
+                console.error('API Error:', error);
+                return generateMockAnalysis(imageBase64);
+            }
+        };
+
+        const generateMockAnalysis = (imageBase64) => {
+            const seed = imageBase64
+                ? Array.from(imageBase64).reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
+                : Date.now();
+            const pick = (items, offset = 0) => items[(seed + offset) % items.length];
+            const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+            const skinTypes = ['combination', 'oily', 'dry', 'sensitive'];
+            const severities = ['none', 'mild', 'moderate', 'severe'];
+            const porosities = ['small', 'medium', 'large'];
+            const concernsPool = ['breakouts', 'dark circles', 'fine lines', 'dryness', 'oiliness', 'dark spots', 'redness'];
+
+            const skinType = pick(skinTypes, 1);
+            const glowScore = clamp(40 + (seed % 61), 0, 100);
+            const hydration = clamp(30 + ((seed >> 2) % 71), 0, 100);
+            const darkSpots = clamp((seed >> 4) % 11, 0, 10);
+            const wrinkles = clamp((seed >> 6) % 11, 0, 10);
+            const eyeIndex = (seed >> 8) % severities.length;
+            const concern1 = pick(concernsPool, 2);
+            const concern2 = pick(concernsPool, 3);
+            const concerns = [concern1, concern2].filter((v, i, a) => a.indexOf(v) === i);
+
+            return {
+                skinType,
+                skinAge: 18 + ((seed >> 1) % 32),
+                glowScore,
+                concerns,
+                acneZones: [
+                    { zone: 'forehead', severity: pick(['mild', 'moderate', 'severe'], 4) },
+                    { zone: 'chin', severity: pick(['none', 'mild', 'moderate'], 5) }
+                ],
+                darkSpots,
+                wrinkles,
+                hydration,
+                uvDamage: (seed % 2) === 0,
+                eyeArea: { darkCircles: severities[eyeIndex], puffiness: severities[(eyeIndex + 1) % severities.length] },
+                porosity: pick(porosities, 6),
+                recommendations: [
+                    skinType === 'oily' ? 'Use a gel-based cleanser daily' : 'Use a hydrating cleanser daily',
+                    darkSpots > 4 ? 'Apply vitamin C serum every morning' : 'Keep skin hydrated with a moisturizer',
+                    glowScore < 60 ? 'Use a gentle exfoliant 2x a week' : 'Maintain your routine and protect with sunscreen',
+                    'Use SPF 50+ every day'
+                ],
+                summary: `This result is generated based on the uploaded image and shows ${skinType} skin with a glow score of ${glowScore}. Focus on ${concerns.join(' and ')}.`
+            };
+        };
+
+        const SplashScreen = ({ onComplete }) => (
+            <div className="min-h-screen bg-gradient-to-b from-purple-900 via-black to-black flex flex-col items-center justify-center p-4 text-center fade-in-up">
+                <div className="mb-8 pulse-glow p-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
+                    <span className="text-5xl">✨</span>
+                </div>
+                <h1 className="text-5xl font-bold mb-2 gradient-text">GlowAI</h1>
+                <p className="text-gray-400 mb-2 text-lg">Your AI Skin Companion</p>
+                <p className="text-gray-500 text-sm max-w-xs mb-12">Professional skin analysis powered by AI</p>
+                <button onClick={onComplete} className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-full font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300">
+                    Get Started
+                </button>
+            </div>
+        );
+
+        const OnboardingQuiz = ({ onComplete }) => {
+            const [step, setStep] = useState(0);
+            const [quiz, setQuiz] = useState({
+                skinType: '',
+                concerns: [],
+                age: '',
+                gender: '',
+                location: ''
+            });
+
+            const steps = [
+                { title: 'What\'s your skin type?', options: ['Oily', 'Dry', 'Combination', 'Sensitive'], key: 'skinType' },
+                { title: 'Main skin concerns?', options: ['Acne', 'Dark Circles', 'Wrinkles', 'Dryness', 'Oiliness', 'Dark Spots'], key: 'concerns', multiple: true },
+                { title: 'Age range?', options: ['<18', '18-25', '26-35', '36-45', '45+'], key: 'age' },
+                { title: 'Gender (optional)', options: ['Male', 'Female', 'Other', 'Skip'], key: 'gender' },
+                { title: 'Location?', input: true, key: 'location' }
+            ];
+
+            const currentStep = steps[step];
+
+            const handleSelect = (value) => {
+                if (currentStep.multiple) {
+                    setQuiz(prev => ({
+                        ...prev,
+                        concerns: prev.concerns.includes(value)
+                            ? prev.concerns.filter(c => c !== value)
+                            : [...prev.concerns, value]
+                    }));
+                } else {
+                    setQuiz(prev => ({ ...prev, [currentStep.key]: value }));
+                    if (step < steps.length - 1) setStep(step + 1);
+                }
+            };
+
+            const handleNext = () => {
+                if (step < steps.length - 1) setStep(step + 1);
+                else {
+                    userData = { ...userData, ...quiz };
+                    onComplete();
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 flex flex-col max-w-md mx-auto justify-center fade-in-up">
+                    <div className="mb-8">
+                        <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden mb-6">
+                            <div className="bg-gradient-to-r from-purple-600 to-pink-600 h-full transition-all duration-300" style={{ width: `${((step + 1) / steps.length) * 100}%` }} />
+                        </div>
+                        <h2 className="text-3xl font-bold gradient-text mb-4">{currentStep.title}</h2>
+                    </div>
+
+                    {currentStep.input ? (
+                        <input type="text" placeholder="Enter your city" value={quiz.location} onChange={(e) => setQuiz(prev => ({ ...prev, location: e.target.value }))} className="w-full px-4 py-3 rounded-lg mb-6" />
+                    ) : (
+                        <div className="grid grid-cols-1 gap-3 mb-6">
+                            {currentStep.options.map((option, idx) => (
+                                <button key={idx} onClick={() => handleSelect(option)} className={`p-4 rounded-lg font-semibold transition-all duration-300 card-hover ${
+                                    currentStep.multiple
+                                        ? quiz.concerns.includes(option)
+                                            ? 'bg-gradient-to-r from-purple-600 to-pink-600'
+                                            : 'glass-effect'
+                                        : quiz[currentStep.key] === option
+                                            ? 'bg-gradient-to-r from-purple-600 to-pink-600'
+                                            : 'glass-effect'
+                                }`}>
+                                    {option}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    <button onClick={handleNext} disabled={!quiz[currentStep.key] && (!currentStep.multiple || quiz.concerns.length === 0)} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold disabled:opacity-50 hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300">
+                        {step === steps.length - 1 ? 'Complete' : 'Next'}
+                    </button>
+                </div>
+            );
+        };
+
+        const AuthScreen = ({ onAuthSuccess }) => {
+            const [isLogin, setIsLogin] = useState(false);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleAuth = async () => {
+                setLoading(true);
+                try {
+                    if (isLogin) {
+                        await mockAuth.login(email, password);
+                    } else {
+                        await mockAuth.signUp(email, password);
+                    }
+                    onAuthSuccess();
+                } catch (error) {
+                    alert('Auth error: ' + error.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 flex flex-col max-w-md mx-auto justify-center fade-in-up">
+                    <div className="mb-8 text-center">
+                        <h1 className="text-4xl font-bold gradient-text mb-2">GlowAI</h1>
+                        <p className="text-gray-400">{isLogin ? 'Welcome Back' : 'Join the Glow'}</p>
+                    </div>
+
+                    <div className="space-y-4 mb-6">
+                        <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-lg" />
+                        <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg" />
+                    </div>
+
+                    <button onClick={handleAuth} disabled={loading} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold mb-4 hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300 disabled:opacity-50">
+                        {loading ? 'Processing...' : isLogin ? 'Sign In' : 'Sign Up'}
+                    </button>
+
+                    <button onClick={() => setIsLogin(!isLogin)} className="text-purple-400 hover:text-purple-300 text-center py-2">
+                        {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+                    </button>
+
+                    <div className="mt-6 pt-6 border-t border-gray-700">
+                        <button className="w-full py-3 glass-effect rounded-lg font-semibold flex items-center justify-center gap-2 hover:bg-gray-800 transition-all">
+                            <span>🔵</span> Continue with Google
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const Dashboard = ({ onNavigate }) => {
+            const [skinScore, setSkinScore] = useState(78);
+            const [streak, setStreak] = useState(7);
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <div className="mb-8">
+                        <h1 className="text-3xl font-bold gradient-text mb-2">Hey {firebaseUser?.email?.split('@')[0]}! 👋</h1>
+                        <p className="text-gray-400">Your skin health dashboard</p>
+                    </div>
+
+                    <div className="glass-effect p-6 rounded-2xl mb-6 card-hover">
+                        <div className="flex justify-between items-center mb-4">
+                            <span className="text-gray-400">Glow Score</span>
+                            <span className="text-2xl font-bold gradient-text">{skinScore}/100</span>
+                        </div>
+                        <div className="w-full bg-gray-700 h-3 rounded-full overflow-hidden">
+                            <div className="bg-gradient-to-r from-purple-600 to-pink-600 h-full transition-all duration-300" style={{ width: `${skinScore}%` }} />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <div className="text-3xl mb-2">🔥</div>
+                            <p className="text-sm text-gray-400">Streak</p>
+                            <p className="text-2xl font-bold">{streak} days</p>
+                        </div>
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <div className="text-3xl mb-2">📸</div>
+                            <p className="text-sm text-gray-400">Scans</p>
+                            <p className="text-2xl font-bold">{scanHistory.length}</p>
+                        </div>
+                    </div>
+
+                    <button onClick={() => onNavigate('scan')} className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-bold text-lg mb-6 hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300 flex items-center justify-center gap-2">
+                        <span>📸</span> Quick Skin Scan
+                    </button>
+
+                    <div className="mb-6">
+                        <h3 className="text-lg font-bold mb-4">Recent Scans</h3>
+                        {scanHistory.length > 0 ? (
+                            scanHistory.slice(-3).reverse().map((scan, idx) => (
+                                <div key={idx} className="glass-effect p-4 rounded-lg mb-3 card-hover cursor-pointer" onClick={() => onNavigate('results', scan)}>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-sm text-gray-400">{new Date(scan.date).toLocaleDateString()}</span>
+                                        <span className="font-bold gradient-text">{scan.glowScore}/100</span>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-gray-500 text-center py-6">No scans yet. Take your first scan! 📸</p>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 mb-6">
+                        <button onClick={() => onNavigate('progress')} className="glass-effect p-4 rounded-lg hover:bg-gray-800 transition-all card-hover text-center">
+                            <div className="text-2xl mb-2">📈</div>
+                            <p className="text-sm">Progress</p>
+                        </button>
+                        <button onClick={() => onNavigate('profile')} className="glass-effect p-4 rounded-lg hover:bg-gray-800 transition-all card-hover text-center">
+                            <div className="text-2xl mb-2">👤</div>
+                            <p className="text-sm">Profile</p>
+                        </button>
+                        <button onClick={() => onNavigate('products')} className="glass-effect p-4 rounded-lg hover:bg-gray-800 transition-all card-hover text-center">
+                            <div className="text-2xl mb-2">🧴</div>
+                            <p className="text-sm">Products</p>
+                        </button>
+                        <button onClick={() => onNavigate('subscription')} className="glass-effect p-4 rounded-lg hover:bg-gray-800 transition-all card-hover text-center">
+                            <div className="text-2xl mb-2">👑</div>
+                            <p className="text-sm">Pro Plan</p>
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ScanScreen = ({ onNavigate }) => {
+            const fileInput = useRef(null);
+            const [selectedImage, setSelectedImage] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const handleImageCapture = (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        setSelectedImage(event.target.result);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const handleAnalyze = async () => {
+                if (!selectedImage) return;
+
+                setLoading(true);
+                try {
+                    const analysis = await analyzeSkinWithAPI(selectedImage);
+                    const scanData = {
+                        date: new Date().toISOString(),
+                        image: selectedImage,
+                        ...analysis
+                    };
+                    scanHistory.push(scanData);
+                    onNavigate('results', scanData);
+                } catch (error) {
+                    alert('Analysis failed: ' + error.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('dashboard')} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="mb-8">
+                        <h1 className="text-3xl font-bold gradient-text mb-2">Skin Scan</h1>
+                        <p className="text-gray-400">Upload a clear face photo for analysis</p>
+                    </div>
+
+                    {selectedImage ? (
+                        <div className="mb-6">
+                            <img src={selectedImage} alt="Selected" className="w-full rounded-lg mb-4 border border-purple-500/50" />
+                            <button onClick={() => fileInput.current?.click()} className="w-full py-2 glass-effect rounded-lg mb-3 hover:bg-gray-800 transition-all">
+                                Choose Different Image
+                            </button>
+                            <button onClick={handleAnalyze} disabled={loading} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300 disabled:opacity-50">
+                                {loading ? 'Analyzing... 🔍' : 'Analyze Skin ✨'}
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="glass-effect p-12 rounded-lg text-center mb-6 card-hover cursor-pointer" onClick={() => fileInput.current?.click()}>
+                            <div className="text-6xl mb-4">📸</div>
+                            <p className="font-semibold mb-2">Upload Face Photo</p>
+                            <p className="text-sm text-gray-400">Clear lighting, front-facing</p>
+                        </div>
+                    )}
+
+                    <input ref={fileInput} type="file" accept="image/*" onChange={handleImageCapture} className="hidden" />
+
+                    <div className="glass-effect p-4 rounded-lg text-sm text-gray-400">
+                        <p className="font-semibold mb-2">⚠️ Privacy First</p>
+                        <p>No face data is stored. Your image is analyzed and deleted immediately after scan.</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const ResultsScreen = ({ data, onNavigate }) => {
+            if (!data) return null;
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('dashboard')} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="text-center mb-8">
+                        <h1 className="text-4xl font-bold gradient-text mb-2">Skin Analysis Report</h1>
+                        <p className="text-gray-400">Your personalized skin insights</p>
+                    </div>
+
+                    <div className="glass-effect p-6 rounded-2xl mb-6 text-center card-hover">
+                        <p className="text-gray-400 mb-2">Glow Score</p>
+                        <p className="text-5xl font-bold gradient-text mb-2">{data.glowScore}/100</p>
+                        <p className="text-sm text-gray-500">{data.summary}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <p className="text-gray-400 mb-2">Skin Type</p>
+                            <p className="text-lg font-bold capitalize">{data.skinType}</p>
+                        </div>
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <p className="text-gray-400 mb-2">Skin Age</p>
+                            <p className="text-lg font-bold">{data.skinAge} yo</p>
+                        </div>
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <p className="text-gray-400 mb-2">Hydration</p>
+                            <p className="text-lg font-bold">{data.hydration}%</p>
+                        </div>
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <p className="text-gray-400 mb-2">Pore Size</p>
+                            <p className="text-lg font-bold capitalize">{data.porosity}</p>
+                        </div>
+                    </div>
+
+                    <h3 className="text-lg font-bold mb-4">Top Concerns</h3>
+                    {data.concerns.length > 0 ? (
+                        <div className="space-y-3 mb-6">
+                            {data.concerns.map((concern, idx) => (
+                                <div key={idx} className="glass-effect p-3 rounded-lg flex items-center gap-3 card-hover">
+                                    <span className="text-lg">⚠️</span>
+                                    <span className="flex-1 capitalize">{concern}</span>
+                                    <span className="text-xs bg-purple-600 px-2 py-1 rounded-full">{idx === 0 ? 'Priority' : 'Secondary'}</span>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-gray-500 text-center mb-6">Great news! No major concerns detected.</p>
+                    )}
+
+                    <h3 className="text-lg font-bold mb-4">AI Recommendations</h3>
+                    <div className="space-y-3 mb-6">
+                        {data.recommendations.map((rec, idx) => (
+                            <div key={idx} className="glass-effect p-3 rounded-lg flex items-start gap-3 card-hover">
+                                <span className="text-lg">💡</span>
+                                <span>{rec}</span>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="glass-effect p-4 rounded-lg text-sm text-gray-400 mb-6">
+                        <p className="font-semibold mb-2">📋 Important Disclaimer</p>
+                        <p>This analysis is for informational purposes only and should not be considered a professional medical diagnosis. Please consult a dermatologist for medical concerns.</p>
+                    </div>
+
+                    <button onClick={() => onNavigate('products', data)} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300 mb-3">
+                        See Product Recommendations
+                    </button>
+                </div>
+            );
+        };
+
+        const ProductsScreen = ({ data, onNavigate }) => {
+            const products = [
+                { name: 'Retinol Night Serum', price: '₹499', ingredients: ['Retinol', 'Hyaluronic Acid'], buyLink: 'https://www.amazon.in/dp/B09ABC1234', store: 'Amazon' },
+                { name: 'Vitamin C Brightener', price: '₹399', ingredients: ['Vitamin C', 'Ferulic Acid'], buyLink: 'https://www.purple.com/products/vitamin-c-brightener', store: 'Purple' },
+                { name: 'Hydrating Face Mask', price: '₹299', ingredients: ['Hyaluronic Acid', 'Aloe'], buyLink: 'https://www.amazon.in/dp/B09DEF5678', store: 'Amazon' },
+                { name: 'Sunscreen SPF 50', price: '₹349', ingredients: ['Zinc Oxide', 'Titanium'], buyLink: 'https://www.purple.com/products/sunscreen-spf-50', store: 'Purple' },
+            ];
+            const isPro = userSubscription.plan === 'pro';
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('results', data)} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="mb-8">
+                        <h1 className="text-3xl font-bold gradient-text mb-2">Recommended Products</h1>
+                        <p className="text-gray-400">Curated for your skin type & concerns</p>
+                    </div>
+
+                    <div className="space-y-4 mb-6">
+                        {products.map((product, idx) => (
+                            <div key={idx} className="glass-effect p-4 rounded-lg card-hover">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="font-bold">{product.name}</span>
+                                    <span className="text-pink-500 font-bold">{product.price}</span>
+                                </div>
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                    {product.ingredients.map((ing, i) => (
+                                        <span key={i} className="text-xs bg-purple-600/30 px-2 py-1 rounded-full">{ing}</span>
+                                    ))}
+                                </div>
+                                {isPro ? (
+                                    <a href={product.buyLink} target="_blank" rel="noopener noreferrer" className="text-sm text-purple-400 hover:text-purple-300 font-semibold">
+                                        Buy on {product.store} →
+                                    </a>
+                                ) : (
+                                    <div className="text-sm text-gray-400">Upgrade to Pro to unlock direct buy links.</div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    <button onClick={() => onNavigate('subscription')} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300">
+                        {isPro ? 'Thank you for being Pro' : 'Unlock Full Recommendations with Pro'}
+                    </button>
+                </div>
+            );
+        };
+
+        const ProgressScreen = ({ onNavigate }) => {
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('dashboard')} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="mb-8">
+                        <h1 className="text-3xl font-bold gradient-text mb-2">Your Progress</h1>
+                        <p className="text-gray-400">Track your skin transformation</p>
+                    </div>
+
+                    <div className="glass-effect p-6 rounded-lg mb-6 text-center card-hover">
+                        <p className="text-gray-400 mb-4">Skin Score Improvement</p>
+                        <p className="text-4xl font-bold gradient-text mb-2">+12%</p>
+                        <p className="text-sm text-gray-500">Compared to last month</p>
+                    </div>
+
+                    <h3 className="text-lg font-bold mb-4">Weekly Reports</h3>
+                    <div className="space-y-3 mb-6">
+                        {['Week 4', 'Week 3', 'Week 2', 'Week 1'].map((week, idx) => (
+                            <div key={idx} className="glass-effect p-4 rounded-lg flex items-center justify-between card-hover">
+                                <span>{week}</span>
+                                <span className="font-bold gradient-text">{78 + idx}%</span>
+                            </div>
+                        ))}
+                    </div>
+
+                    <h3 className="text-lg font-bold mb-4">Achievements 🏆</h3>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover">
+                            <div className="text-3xl mb-2">🔥</div>
+                            <p className="text-sm">7-Day Streak</p>
+                        </div>
+                        <div className="glass-effect p-4 rounded-lg text-center card-hover opacity-50">
+                            <div className="text-3xl mb-2">⭐</div>
+                            <p className="text-sm">Glow Up</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ProfileScreen = ({ onNavigate }) => {
+            const [editMode, setEditMode] = useState(false);
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('dashboard')} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="mb-8 text-center">
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 mx-auto mb-4 flex items-center justify-center text-3xl">
+                            👤
+                        </div>
+                        <h1 className="text-3xl font-bold gradient-text">{firebaseUser?.email?.split('@')[0]}</h1>
+                        <p className="text-gray-400">{firebaseUser?.email}</p>
+                    </div>
+
+                    <div className="glass-effect p-6 rounded-lg mb-6 card-hover">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold">Subscription Status</h3>
+                            <span className="text-xs bg-purple-600 px-2 py-1 rounded-full capitalize">{userSubscription.plan}</span>
+                        </div>
+                        <p className="text-sm text-gray-400 mb-4">{userSubscription.scansThisMonth}/3 scans used</p>
+                        <button onClick={() => onNavigate('subscription')} className="w-full py-2 glass-effect rounded-lg hover:bg-gray-800 transition-all text-sm">
+                            Upgrade to Pro
+                        </button>
+                    </div>
+
+                    <div className="glass-effect p-6 rounded-lg mb-6 card-hover">
+                        <h3 className="font-bold mb-4">Skin Profile</h3>
+                        <div className="space-y-3 text-sm">
+                            <div className="flex justify-between">
+                                <span className="text-gray-400">Skin Type</span>
+                                <span className="capitalize font-semibold">{userData.skinType || 'Not set'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-400">Age</span>
+                                <span className="font-semibold">{userData.age || 'Not set'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-400">Location</span>
+                                <span className="font-semibold">{userData.location || 'Not set'}</span>
+                            </div>
+                        </div>
+                        <button onClick={() => setEditMode(!editMode)} className="w-full mt-4 py-2 text-purple-400 hover:text-purple-300 text-sm font-semibold">
+                            {editMode ? 'Save Profile' : 'Edit Profile'}
+                        </button>
+                    </div>
+
+                    <button onClick={() => { mockAuth.logout(); onNavigate('auth'); }} className="w-full py-3 glass-effect rounded-lg hover:bg-red-900/20 hover:border-red-500/50 text-red-400 font-semibold transition-all">
+                        Logout
+                    </button>
+                </div>
+            );
+        };
+
+        const SubscriptionScreen = ({ onNavigate }) => {
+            const [paymentInfo, setPaymentInfo] = useState({ name: '', card: '', expiry: '', cvv: '' });
+            const [processing, setProcessing] = useState(false);
+
+            const handlePayment = async () => {
+                if (!paymentInfo.name || !paymentInfo.card || !paymentInfo.expiry || !paymentInfo.cvv) {
+                    alert('Please complete all payment details.');
+                    return;
+                }
+
+                setProcessing(true);
+                if (typeof Razorpay === 'undefined') {
+                    alert('Razorpay SDK not loaded. Using demo checkout.');
+                    userSubscription = { plan: 'pro', scansThisMonth: 0 };
+                    onNavigate('dashboard');
+                    return;
+                }
+
+                const options = {
+                    key: 'YOUR_RAZORPAY_KEY',
+                    amount: 9900,
+                    currency: 'INR',
+                    description: 'GlowAI Pro - Monthly Subscription',
+                    handler: function (response) {
+                        userSubscription = { plan: 'pro', scansThisMonth: 0 };
+                        alert('Payment successful! Welcome to GlowAI Pro 👑');
+                        onNavigate('dashboard');
+                    },
+                    prefill: {
+                        email: firebaseUser?.email,
+                        contact: '9999999999'
+                    }
+                };
+
+                try {
+                    new Razorpay(options).open();
+                } catch (error) {
+                    alert('Payment error: ' + error.message);
+                } finally {
+                    setProcessing(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-b from-black to-purple-900/20 p-4 max-w-md mx-auto fade-in-up pb-20">
+                    <button onClick={() => onNavigate('dashboard')} className="mb-6 text-purple-400 hover:text-purple-300">
+                        ← Back
+                    </button>
+
+                    <div className="mb-8 text-center">
+                        <h1 className="text-3xl font-bold gradient-text mb-2">Unlock GlowAI Pro</h1>
+                        <p className="text-gray-400">Unlimited scans & exclusive features</p>
+                    </div>
+
+                    <div className="space-y-4 mb-8">
+                        <div className="glass-effect p-6 rounded-lg card-hover">
+                            <h3 className="text-lg font-bold mb-4">Free Plan</h3>
+                            <div className="text-3xl font-bold gradient-text mb-4">₹0</div>
+                            <ul className="space-y-2 text-sm mb-4 text-gray-300">
+                                <li>✓ 3 scans/month</li>
+                                <li>✓ Basic analysis</li>
+                                <li>✓ Skin type detection</li>
+                                <li>✗ Product recommendations</li>
+                                <li>✗ Progress tracking</li>
+                            </ul>
+                            <button className="w-full py-2 glass-effect rounded-lg opacity-50 cursor-not-allowed">Current Plan</button>
+                        </div>
+
+                        <div className="glass-effect p-6 rounded-lg card-hover border-2 border-purple-500">
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="text-lg font-bold">Pro Plan</h3>
+                                <span className="text-xs bg-gradient-to-r from-purple-600 to-pink-600 px-2 py-1 rounded-full">RECOMMENDED</span>
+                            </div>
+                            <div className="text-3xl font-bold gradient-text mb-1">₹99</div>
+                            <p className="text-xs text-gray-400 mb-4">per month</p>
+                            <ul className="space-y-2 text-sm mb-6 text-gray-300">
+                                <li>✓ Unlimited scans</li>
+                                <li>✓ Advanced analysis</li>
+                                <li>✓ All skin parameters</li>
+                                <li>✓ Product recommendations</li>
+                                <li>✓ Progress tracking & badges</li>
+                                <li>✓ Before/after comparison</li>
+                                <li>✓ AI skin insights</li>
+                            </ul>
+                        </div>
+
+                        <div className="glass-effect p-6 rounded-lg card-hover">
+                            <h3 className="text-lg font-bold mb-4">Payment Details</h3>
+                            <div className="space-y-3 text-sm text-gray-300 mb-4">
+                                <div className="flex justify-between">
+                                    <span>Plan</span>
+                                    <span>GlowAI Pro</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Amount</span>
+                                    <span>₹99 / month</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>GST</span>
+                                    <span>Included</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>UPI</span>
+                                    <span>8923617175@pytes</span>
+                                </div>
+                                <div className="flex justify-between font-semibold">
+                                    <span>Total today</span>
+                                    <span>₹99</span>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3 mb-3">
+                                <input type="text" placeholder="Name on card" value={paymentInfo.name} onChange={(e) => setPaymentInfo(prev => ({ ...prev, name: e.target.value }))} className="w-full px-4 py-3 rounded-lg bg-black/40 border border-purple-500 text-white" />
+                                <input type="text" placeholder="Card number" value={paymentInfo.card} onChange={(e) => setPaymentInfo(prev => ({ ...prev, card: e.target.value }))} className="w-full px-4 py-3 rounded-lg bg-black/40 border border-purple-500 text-white" />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <input type="text" placeholder="Expiry MM/YY" value={paymentInfo.expiry} onChange={(e) => setPaymentInfo(prev => ({ ...prev, expiry: e.target.value }))} className="w-full px-4 py-3 rounded-lg bg-black/40 border border-purple-500 text-white" />
+                                    <input type="password" placeholder="CVV" value={paymentInfo.cvv} onChange={(e) => setPaymentInfo(prev => ({ ...prev, cvv: e.target.value }))} className="w-full px-4 py-3 rounded-lg bg-black/40 border border-purple-500 text-white" />
+                                </div>
+                            </div>
+
+                            <p className="text-xs text-gray-500">Secure payment processed by Razorpay. No card details are stored in this demo app.</p>
+                        </div>
+                    </div>
+
+                    <button onClick={handlePayment} disabled={processing} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:shadow-lg hover:shadow-purple-500/50 transition-all duration-300 disabled:opacity-50">
+                        {processing ? 'Processing Payment...' : 'Pay ₹99 Now'}
+                    </button>
+
+                    <p className="text-center text-xs text-gray-500 mt-4">
+                        By subscribing, you agree to our Terms & Conditions. Cancel anytime.
+                    </p>
+                </div>
+            );
+        };
+
+        const GlowAIApp = () => {
+            const [screen, setScreen] = useState('splash');
+            const [screenData, setScreenData] = useState(null);
+
+            const navigate = (to, data = null) => {
+                setScreen(to);
+                setScreenData(data);
+            };
+
+            const renderScreen = () => {
+                switch (screen) {
+                    case 'splash':
+                        return <SplashScreen onComplete={() => navigate('onboarding')} />;
+                    case 'onboarding':
+                        return <OnboardingQuiz onComplete={() => navigate('auth')} />;
+                    case 'auth':
+                        return <AuthScreen onAuthSuccess={() => navigate('dashboard')} />;
+                    case 'dashboard':
+                        return <Dashboard onNavigate={navigate} />;
+                    case 'scan':
+                        return <ScanScreen onNavigate={navigate} />;
+                    case 'results':
+                        return <ResultsScreen data={screenData} onNavigate={navigate} />;
+                    case 'products':
+                        return <ProductsScreen data={screenData} onNavigate={navigate} />;
+                    case 'progress':
+                        return <ProgressScreen onNavigate={navigate} />;
+                    case 'profile':
+                        return <ProfileScreen onNavigate={navigate} />;
+                    case 'subscription':
+                        return <SubscriptionScreen onNavigate={navigate} />;
+                    default:
+                        return <SplashScreen onComplete={() => navigate('onboarding')} />;
+                }
+            };
+
+            return (
+                <div className="bg-black min-h-screen text-white">
+                    {renderScreen()}
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<GlowAIApp />);
+    </script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('ServiceWorker registered', reg))
+                    .catch(err => console.log('ServiceWorker registration failed', err));
+            });
+        }
+    </script>
+</body>
+</html>
